@@ -173,11 +173,13 @@ def get_transform(transform_type, image_set):
 
     if image_set == 'val':
         transforms = A.Compose([
+            A.ToGray(always_apply=True),
             A.RandomSizedBBoxSafeCrop(scales[0], scales[1])
         ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
     else:
         if transform_type == 'geometric':
             transforms = A.Compose([
+                A.ToGray(always_apply=True),
                 A.HorizontalFlip(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
@@ -186,18 +188,21 @@ def get_transform(transform_type, image_set):
         elif transform_type == 'randomerasing':
             transforms = CT.Compose([
                 CT.PILToTensor(),
+                CT.Grayscale(3),
                 CT.RandomErasing(p=0.5, value='random'),
                 CT.ConvertImageDtype(torch.float32),
                 CT.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ])
         elif transform_type == 'noise':
             transforms = A.Compose([
+                A.ToGray(always_apply=True),
                 A.GaussNoise(p=0.5),
             ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         elif transform_type == 'copypaste':
             transforms = get_copypaste_transform()
         elif transform_type == 'geometric+noise':
             geometric = transforms = A.Compose([
+                A.ToGray(always_apply=True),
                 A.HorizontalFlip(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
