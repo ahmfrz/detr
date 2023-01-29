@@ -12,6 +12,12 @@ import torchvision
 from pycocotools import mask as coco_mask
 
 import datasets.transforms as T
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+import torchvision.transforms as CT
+import numpy as np
+from PIL import Image
+import cv2
 
 
 class CocoDetection(torchvision.datasets.CocoDetection):
@@ -154,5 +160,170 @@ def build(image_set, args):
     }
 
     img_folder, ann_file = PATHS[image_set]
-    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks)
+    
+    if args.has_custom_detection_class:
+        dataset = CocoAugmented(
+            img_folder, ann_file, transforms=get_transform(args.transform_type, image_set), return_masks=args.masks)
+    else:
+        dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks)
     return dataset
+
+def get_transform(transform_type, image_set):
+    scales = [480, 512]
+
+    if image_set == 'val':
+        transforms = A.Compose([
+            A.RandomSizedBBoxSafeCrop(scales[0], scales[1])
+        ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+    else:
+        if transform_type == 'geometric':
+            transforms = A.Compose([
+                A.HorizontalFlip(p=0.5),
+                A.Affine(translate_percent=np.random.random_sample(),p=0.5),
+                A.Affine(rotate=np.random.randint(1,359), p=0.5),
+                A.RandomSizedBBoxSafeCrop(350, 350)
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+        elif transform_type == 'randomerasing':
+            transforms = CT.Compose([
+                CT.PILToTensor(),
+                CT.RandomErasing(p=0.5, value='random'),
+                CT.ConvertImageDtype(torch.float32),
+                CT.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ])
+        elif transform_type == 'noise':
+            transforms = A.Compose([
+                A.GaussNoise(p=0.5),
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+        elif transform_type == 'copypaste':
+            transforms = get_copypaste_transform()
+        elif transform_type == 'geometric+noise':
+            geometric = transforms = A.Compose([
+                A.HorizontalFlip(p=0.5),
+                A.Affine(translate_percent=np.random.random_sample(),p=0.5),
+                A.Affine(rotate=np.random.randint(1,359), p=0.5),
+                A.RandomSizedBBoxSafeCrop(350, 350)
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+
+            noise = A.Compose([
+                A.GaussNoise(p=0.5),
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+            
+            transforms = A.Compose([
+                geometric, noise
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+        else:
+            raise ValueError(f'Invalid transform type: {transform_type}')
+
+    return transforms
+
+def get_copypaste_transform():
+    return copypaste_transform
+
+def copypaste_transform(image, bboxes, category_ids, anns, coco, **kwargs):
+    if np.random.random() < 0.5: # prob of 0.5
+        return {
+        'image': image,
+        'bboxes': bboxes,
+        'category_ids': category_ids
+    }
+
+    num_of_copies = np.random.randint(0, 5)
+    objects = extract_objects(image, anns, coco)
+    img_obj, ann_obj = objects[0]
+    mask_obj = coco.annToMask(ann_obj)
+
+    for i in range(num_of_copies):
+        # check if x,y overlap with other objects
+        mask =np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+        for ann in anns:
+            mask = np.maximum(coco.annToMask(ann), mask)
+            
+        has_overlap = True
+        while has_overlap:
+            # generate random positions
+            x, y = np.random.randint(
+                0, image.shape[1]), np.random.randint(0, image.shape[0])
+
+            mask_bg_cropped = mask[y:y+img_obj.shape[0], x:x+img_obj.shape[1]]
+            mask_obj_cropped = cv2.resize(
+                mask_obj, (mask_bg_cropped.shape[1], mask_bg_cropped.shape[0]))
+
+            has_overlap = np.bitwise_and(mask_bg_cropped, mask_obj_cropped).any()
+            
+            has_overlap = has_overlap or (
+                (y+img_obj.shape[0]) > image.shape[0]) or ((x+img_obj.shape[1]) > image.shape[1])
+        
+        # blend image
+        alpha = np.ones(img_obj.shape[:2], dtype=np.float32) * 0.7
+        alpha = np.dstack((alpha, alpha, alpha))
+        img_obj_alpha = np.concatenate((img_obj, alpha), axis=2)
+        
+        # blend with object
+        image[y:y+img_obj.shape[0], x:x+img_obj.shape[1],
+            :] = image[y:y+img_obj.shape[0], x:x+img_obj.shape[1], :] * (1-alpha) + img_obj_alpha[:,:,:3] * alpha
+        
+    transformed = {
+        'image': image,
+        'bboxes': bboxes,
+        'category_ids': category_ids
+    }
+    
+    return transformed
+
+def extract_objects(img, anns, coco):
+    outputs = []
+    for ann in anns:
+        mask = coco.annToMask(ann)
+        img_cropped = img * mask[:,:,np.newaxis]
+        rows, cols = np.where(mask)
+        top_row, bottom_row = rows.min(), rows.max()
+        left_col, right_col = cols.min(), cols.max()
+        
+        if top_row == bottom_row:
+            bottom_row += 1
+        
+        if left_col == right_col:
+            right_col += 1
+        
+        outputs.append((img_cropped[top_row:bottom_row, left_col:right_col], ann))
+    return outputs
+
+class CocoAugmented(torchvision.datasets.CocoDetection):
+    def __init__(self, img_folder, ann_file, transforms, return_masks):
+        super(CocoAugmented, self).__init__(img_folder, ann_file)
+        self._transforms = transforms
+        self.prepare = ConvertCocoPolysToMask(return_masks)
+
+    def __getitem__(self, idx):
+        img, target_org = super(CocoAugmented, self).__getitem__(idx)
+        image_id = self.ids[idx]
+        target = {'image_id': image_id, 'annotations': target_org}
+        img, target = self.prepare(img, target)
+        bboxes, cats = self.get_bboxes_and_cats_from_anns(target_org)
+        if self._transforms is not None:
+            if not isinstance(self._transforms, CT.Compose):
+                transformed = self._transforms(
+                    image=np.array(img), bboxes=bboxes, category_ids=cats, coco=self.coco, anns=target_org)
+
+                img = transformed['image']
+                target['boxes'] = torch.as_tensor(transformed['bboxes'], dtype=torch.float32).reshape(-1, 4)
+                target['labels'] = torch.tensor(transformed['category_ids'], dtype=torch.int64)
+                w, h = img.shape[1], img.shape[0]
+                target['size'] = torch.as_tensor([int(h), int(w)])
+                
+                # normalize image and convert to tensor
+                normalize = A.Compose([
+                    A.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                    ToTensorV2()
+                ],bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+                img = normalize(
+                    image=transformed['image'], bboxes=transformed['bboxes'], category_ids=transformed['category_ids'])['image']
+            else:
+                # pytorch transform
+                img = self._transforms(img)
+
+        return img, target
+
+    @staticmethod
+    def get_bboxes_and_cats_from_anns(anns):
+        return [ann['bbox'] for ann in anns], [ann['category_id'] for ann in anns]

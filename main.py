@@ -99,6 +99,10 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    
+    # custom arguments for augmentations
+    parser.add_argument('--has_custom_detection_class', help='custom CoCoDetection class indicator flag')
+    parser.add_argument('--transform_type', type=str, help='custom transforms to be applied, valid options are geometric, colorspace, copypaste, randomnoise, randomerasing')
     return parser
 
 
