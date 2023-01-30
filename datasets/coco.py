@@ -201,20 +201,13 @@ def get_transform(transform_type, image_set):
         elif transform_type == 'copypaste':
             transforms = get_copypaste_transform()
         elif transform_type == 'geometric+noise':
-            geometric = transforms = A.Compose([
+            transforms = A.Compose([
                 A.ToGray(always_apply=True),
                 A.HorizontalFlip(p=0.5),
+                A.GaussNoise(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
-                A.RandomSizedBBoxSafeCrop(350, 350)
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
-
-            noise = A.Compose([
-                A.GaussNoise(p=0.5),
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
-            
-            transforms = A.Compose([
-                geometric, noise
+                A.RandomSizedBBoxSafeCrop(350, 350), 
             ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         else:
             raise ValueError(f'Invalid transform type: {transform_type}')
