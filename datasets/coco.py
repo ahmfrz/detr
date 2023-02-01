@@ -239,15 +239,18 @@ class CopyPaste(A.DualTransform):
         objects = cls.extract_objects(image, anns, coco)
         img_obj, ann_obj = objects[0]
         mask_obj = coco.annToMask(ann_obj)
+        max_tries = 100
 
         for i in range(num_of_copies):
             # check if x,y overlap with other objects
             mask =np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
             for ann in anns:
                 mask = np.maximum(coco.annToMask(ann), mask)
-                
+            
+            trial_count = 0
             has_overlap = True
-            while has_overlap:
+            while has_overlap and trial_count < max_tries:
+                trial_count+=1
                 # generate random positions
                 x, y = np.random.randint(
                     0, image.shape[1]), np.random.randint(0, image.shape[0])
@@ -261,14 +264,15 @@ class CopyPaste(A.DualTransform):
                 has_overlap = has_overlap or (
                     (y+img_obj.shape[0]) > image.shape[0]) or ((x+img_obj.shape[1]) > image.shape[1])
             
-            # blend image
-            alpha = np.ones(img_obj.shape[:2], dtype=np.float32) * 0.7
-            alpha = np.dstack((alpha, alpha, alpha))
-            img_obj_alpha = np.concatenate((img_obj, alpha), axis=2)
-            
-            # blend with object
-            image[y:y+img_obj.shape[0], x:x+img_obj.shape[1],
-                :] = image[y:y+img_obj.shape[0], x:x+img_obj.shape[1], :] * (1-alpha) + img_obj_alpha[:,:,:3] * alpha
+            if trial_count < max_tries:
+                # blend image
+                alpha = np.ones(img_obj.shape[:2], dtype=np.float32) * 0.7
+                alpha = np.dstack((alpha, alpha, alpha))
+                img_obj_alpha = np.concatenate((img_obj, alpha), axis=2)
+                
+                # blend with object
+                image[y:y+img_obj.shape[0], x:x+img_obj.shape[1],
+                    :] = image[y:y+img_obj.shape[0], x:x+img_obj.shape[1], :] * (1-alpha) + img_obj_alpha[:,:,:3] * alpha
             
         return image
 
