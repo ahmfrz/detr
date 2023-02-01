@@ -199,7 +199,9 @@ def get_transform(transform_type, image_set):
                 A.GaussNoise(p=0.5),
             ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         elif transform_type == 'copypaste':
-            transforms = get_copypaste_transform()
+            transforms = A.Compose([
+                CopyPaste(num_of_copies=np.random.randint(0, 5))
+                ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         elif transform_type == 'geometric+noise':
             transforms = A.Compose([
                 A.ToGray(always_apply=True),
@@ -214,77 +216,80 @@ def get_transform(transform_type, image_set):
 
     return transforms
 
-def get_copypaste_transform():
-    return copypaste_transform
-
-def copypaste_transform(image, bboxes, category_ids, anns, coco, **kwargs):
-    if np.random.random() < 0.5: # prob of 0.5
-        return {
-        'image': image,
-        'bboxes': bboxes,
-        'category_ids': category_ids
-    }
-
-    num_of_copies = np.random.randint(0, 5)
-    objects = extract_objects(image, anns, coco)
-    img_obj, ann_obj = objects[0]
-    mask_obj = coco.annToMask(ann_obj)
-
-    for i in range(num_of_copies):
-        # check if x,y overlap with other objects
-        mask =np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-        for ann in anns:
-            mask = np.maximum(coco.annToMask(ann), mask)
-            
-        has_overlap = True
-        while has_overlap:
-            # generate random positions
-            x, y = np.random.randint(
-                0, image.shape[1]), np.random.randint(0, image.shape[0])
-
-            mask_bg_cropped = mask[y:y+img_obj.shape[0], x:x+img_obj.shape[1]]
-            mask_obj_cropped = cv2.resize(
-                mask_obj, (mask_bg_cropped.shape[1], mask_bg_cropped.shape[0]))
-
-            has_overlap = np.bitwise_and(mask_bg_cropped, mask_obj_cropped).any()
-            
-            has_overlap = has_overlap or (
-                (y+img_obj.shape[0]) > image.shape[0]) or ((x+img_obj.shape[1]) > image.shape[1])
-        
-        # blend image
-        alpha = np.ones(img_obj.shape[:2], dtype=np.float32) * 0.7
-        alpha = np.dstack((alpha, alpha, alpha))
-        img_obj_alpha = np.concatenate((img_obj, alpha), axis=2)
-        
-        # blend with object
-        image[y:y+img_obj.shape[0], x:x+img_obj.shape[1],
-            :] = image[y:y+img_obj.shape[0], x:x+img_obj.shape[1], :] * (1-alpha) + img_obj_alpha[:,:,:3] * alpha
-        
-    transformed = {
-        'image': image,
-        'bboxes': bboxes,
-        'category_ids': category_ids
-    }
+class CopyPaste(A.DualTransform):
+    def __init__(self, num_of_copies=2, always_apply: bool = False, p: float = 0.5):
+        super().__init__(always_apply, p)
+        self._num_of_copies = num_of_copies
     
-    return transformed
+    def apply(self, image, anns, coco, **params) -> np.ndarray:
+        return self.copypaste_transform(self._num_of_copies, image, anns, coco)
 
-def extract_objects(img, anns, coco):
-    outputs = []
-    for ann in anns:
-        mask = coco.annToMask(ann)
-        img_cropped = img * mask[:,:,np.newaxis]
-        rows, cols = np.where(mask)
-        top_row, bottom_row = rows.min(), rows.max()
-        left_col, right_col = cols.min(), cols.max()
-        
-        if top_row == bottom_row:
-            bottom_row += 1
-        
-        if left_col == right_col:
-            right_col += 1
-        
-        outputs.append((img_cropped[top_row:bottom_row, left_col:right_col], ann))
-    return outputs
+    def apply_to_bbox(self, bbox, **params):
+        return bbox
+    
+    def get_params_dependent_on_targets(self, params):
+        return {'anns': params['anns'], 'coco': params['coco']}
+    
+    @property
+    def targets_as_params(self):
+        return ['image','bboxes', 'anns', 'coco']
+
+    @classmethod
+    def copypaste_transform(cls, num_of_copies, image, anns, coco, **kwargs):
+        objects = cls.extract_objects(image, anns, coco)
+        img_obj, ann_obj = objects[0]
+        mask_obj = coco.annToMask(ann_obj)
+
+        for i in range(num_of_copies):
+            # check if x,y overlap with other objects
+            mask =np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+            for ann in anns:
+                mask = np.maximum(coco.annToMask(ann), mask)
+                
+            has_overlap = True
+            while has_overlap:
+                # generate random positions
+                x, y = np.random.randint(
+                    0, image.shape[1]), np.random.randint(0, image.shape[0])
+
+                mask_bg_cropped = mask[y:y+img_obj.shape[0], x:x+img_obj.shape[1]]
+                mask_obj_cropped = cv2.resize(
+                    mask_obj, (mask_bg_cropped.shape[1], mask_bg_cropped.shape[0]))
+
+                has_overlap = np.bitwise_and(mask_bg_cropped, mask_obj_cropped).any()
+                
+                has_overlap = has_overlap or (
+                    (y+img_obj.shape[0]) > image.shape[0]) or ((x+img_obj.shape[1]) > image.shape[1])
+            
+            # blend image
+            alpha = np.ones(img_obj.shape[:2], dtype=np.float32) * 0.7
+            alpha = np.dstack((alpha, alpha, alpha))
+            img_obj_alpha = np.concatenate((img_obj, alpha), axis=2)
+            
+            # blend with object
+            image[y:y+img_obj.shape[0], x:x+img_obj.shape[1],
+                :] = image[y:y+img_obj.shape[0], x:x+img_obj.shape[1], :] * (1-alpha) + img_obj_alpha[:,:,:3] * alpha
+            
+        return image
+
+    @staticmethod
+    def extract_objects(img, anns, coco):
+        outputs = []
+        for ann in anns:
+            mask = coco.annToMask(ann)
+            img_cropped = img * mask[:,:,np.newaxis]
+            rows, cols = np.where(mask)
+            top_row, bottom_row = rows.min(), rows.max()
+            left_col, right_col = cols.min(), cols.max()
+            
+            if top_row == bottom_row:
+                bottom_row += 1
+            
+            if left_col == right_col:
+                right_col += 1
+            
+            outputs.append((img_cropped[top_row:bottom_row, left_col:right_col], ann))
+        return outputs
 
 class CocoAugmented(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks):
