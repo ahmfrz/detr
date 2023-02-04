@@ -239,7 +239,7 @@ class CopyPaste(A.DualTransform):
         objects = cls.extract_objects(image, anns, coco)
         img_obj, ann_obj = objects[0]
         mask_obj = coco.annToMask(ann_obj)
-        max_tries = 100
+        max_tries = 10
 
         for i in range(num_of_copies):
             # check if x,y overlap with other objects
