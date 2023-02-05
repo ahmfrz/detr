@@ -183,15 +183,16 @@ def get_transform(transform_type, image_set):
                 A.HorizontalFlip(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
-                A.RandomSizedBBoxSafeCrop(350, 350)
+                A.RandomSizedBBoxSafeCrop(np.random.choice([320, 480, 512]), np.random.choice([320, 480, 512]))
             ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         elif transform_type == 'randomerasing':
             transforms = CT.Compose([
                 CT.PILToTensor(),
                 CT.Grayscale(3),
                 CT.RandomErasing(p=0.5, value='random'),
-                CT.ConvertImageDtype(torch.float32),
-                CT.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                CT.ToPILImage()
+                # CT.ConvertImageDtype(torch.float32),
+                # CT.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ])
         elif transform_type == 'noise':
             transforms = A.Compose([
@@ -200,6 +201,7 @@ def get_transform(transform_type, image_set):
             ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         elif transform_type == 'copypaste':
             transforms = A.Compose([
+                A.ToGray(always_apply=True),
                 CopyPaste(num_of_copies=np.random.randint(0, 5))
                 ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         elif transform_type == 'geometric+noise':
@@ -209,7 +211,7 @@ def get_transform(transform_type, image_set):
                 A.GaussNoise(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
-                A.RandomSizedBBoxSafeCrop(350, 350), 
+                A.RandomSizedBBoxSafeCrop(np.random.choice([320, 480, 512]), np.random.choice([320, 480, 512])), 
             ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
         else:
             raise ValueError(f'Invalid transform type: {transform_type}')
@@ -313,21 +315,34 @@ class CocoAugmented(torchvision.datasets.CocoDetection):
                     image=np.array(img), bboxes=bboxes, category_ids=cats, coco=self.coco, anns=target_org)
 
                 img = transformed['image']
-                target['boxes'] = torch.as_tensor(transformed['bboxes'], dtype=torch.float32).reshape(-1, 4)
-                target['labels'] = torch.tensor(transformed['category_ids'], dtype=torch.int64)
                 w, h = img.shape[1], img.shape[0]
+
+                # guard against no boxes via resizing
+                boxes = torch.as_tensor(transformed['bboxes'], dtype=torch.float32).reshape(-1, 4)
+                boxes[:, 2:] += boxes[:, :2]
+                boxes[:, 0::2].clamp_(min=0, max=w)
+                boxes[:, 1::2].clamp_(min=0, max=h)
+
+                classes = torch.tensor(transformed['category_ids'], dtype=torch.int64)
+
+                keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
+                boxes = boxes[keep]
+                classes = classes[keep]
+
+                target["boxes"] = boxes
+                target["labels"] = classes
+
                 target['size'] = torch.as_tensor([int(h), int(w)])
-                
-                # normalize image and convert to tensor
-                normalize = A.Compose([
-                    A.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-                    ToTensorV2()
-                ],bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
-                img = normalize(
-                    image=transformed['image'], bboxes=transformed['bboxes'], category_ids=transformed['category_ids'])['image']
             else:
                 # pytorch transform
                 img = self._transforms(img)
+            
+            normalize = T.Compose([
+                    T.ToTensor(),
+                    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                ])
+            img, target = normalize(
+                    image=img, target=target)
 
         return img, target
 
