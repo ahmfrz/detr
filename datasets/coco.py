@@ -172,23 +172,26 @@ def get_transform(transform_type, image_set):
     scales = [480, 512]
 
     if image_set == 'val':
-        transforms = A.Compose([
-            A.ToGray(always_apply=True),
-            A.RandomSizedBBoxSafeCrop(scales[0], scales[1])
-        ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+        transforms = T.Compose([
+            T.RandomResize([400], max_size=512)
+        ])
+        # transforms = A.Compose([
+            # A.ToGray(always_apply=True),
+            # A.RandomResizedCrop(scales[0], scales[1])
+        # ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
     else:
         if transform_type == 'geometric':
             transforms = A.Compose([
-                A.ToGray(always_apply=True),
+                # A.ToGray(always_apply=True),
                 A.HorizontalFlip(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
                 A.RandomSizedBBoxSafeCrop(np.random.choice([320, 480, 512]), np.random.choice([320, 480, 512]))
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids'], min_visibility=0.2))
         elif transform_type == 'randomerasing':
             transforms = CT.Compose([
                 CT.PILToTensor(),
-                CT.Grayscale(3),
+                # CT.Grayscale(3),
                 CT.RandomErasing(p=0.5, value='random'),
                 CT.ToPILImage()
                 # CT.ConvertImageDtype(torch.float32),
@@ -196,23 +199,23 @@ def get_transform(transform_type, image_set):
             ])
         elif transform_type == 'noise':
             transforms = A.Compose([
-                A.ToGray(always_apply=True),
+                # A.ToGray(always_apply=True),
                 A.GaussNoise(p=0.5),
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids'], min_visibility=0.2))
         elif transform_type == 'copypaste':
             transforms = A.Compose([
-                A.ToGray(always_apply=True),
+                # A.ToGray(always_apply=True),
                 CopyPaste(num_of_copies=np.random.randint(0, 5))
-                ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+                ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids'], min_visibility=0.2))
         elif transform_type == 'geometric+noise':
             transforms = A.Compose([
-                A.ToGray(always_apply=True),
+                # A.ToGray(always_apply=True),
                 A.HorizontalFlip(p=0.5),
                 A.GaussNoise(p=0.5),
                 A.Affine(translate_percent=np.random.random_sample(),p=0.5),
                 A.Affine(rotate=np.random.randint(1,359), p=0.5),
                 A.RandomSizedBBoxSafeCrop(np.random.choice([320, 480, 512]), np.random.choice([320, 480, 512])), 
-            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']))
+            ], bbox_params=A.BboxParams(format='coco', label_fields=['category_ids'], min_visibility=0.2))
         else:
             raise ValueError(f'Invalid transform type: {transform_type}')
 
@@ -310,7 +313,7 @@ class CocoAugmented(torchvision.datasets.CocoDetection):
         img, target = self.prepare(img, target)
         bboxes, cats = self.get_bboxes_and_cats_from_anns(target_org)
         if self._transforms is not None:
-            if not isinstance(self._transforms, CT.Compose):
+            if isinstance(self._transforms, A.Compose):
                 transformed = self._transforms(
                     image=np.array(img), bboxes=bboxes, category_ids=cats, coco=self.coco, anns=target_org)
 
@@ -333,6 +336,8 @@ class CocoAugmented(torchvision.datasets.CocoDetection):
                 target["labels"] = classes
 
                 target['size'] = torch.as_tensor([int(h), int(w)])
+            elif isinstance(self._transforms, T.Compose):
+                img, target = self._transforms(img, target)
             else:
                 # pytorch transform
                 img = self._transforms(img)
